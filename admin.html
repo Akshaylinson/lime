@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Chat Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0; padding: 0;
+      display: flex;
+      height: 100vh;
+      background: #121212;
+      color: #eee;
+    }
+    #usersList {
+      width: 300px;
+      background: #1f1f1f;
+      border-right: 1px solid #333;
+      overflow-y: auto;
+    }
+    #usersList h2 {
+      padding: 10px;
+      margin: 0;
+      background: #292929;
+      border-bottom: 1px solid #333;
+    }
+    .userItem {
+      padding: 10px;
+      cursor: pointer;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .userItem:hover {
+      background: #333;
+    }
+    .userName {
+      font-weight: bold;
+    }
+    .userMeta {
+      font-size: 12px;
+      color: #aaa;
+    }
+    .notificationBadge {
+      background: #e53935;
+      color: white;
+      border-radius: 12px;
+      padding: 2px 6px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    #chatSection {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #chatHeader {
+      background: #222;
+      padding: 15px;
+      font-size: 20px;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #calendarButton {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #messages {
+      flex-grow: 1;
+      padding: 15px;
+      overflow-y: auto;
+      background: #181818;
+    }
+    .message {
+      margin-bottom: 10px;
+      max-width: 70%;
+      padding: 8px 12px;
+      border-radius: 12px;
+      line-height: 1.3;
+      word-wrap: break-word;
+    }
+    .message.admin {
+      background: #0d6efd;
+      color: white;
+      margin-left: auto;
+    }
+    .message.user {
+      background: #333;
+      color: white;
+      margin-right: auto;
+    }
+    #messageForm {
+      display: flex;
+      border-top: 1px solid #333;
+      background: #222;
+      padding: 10px;
+    }
+    #messageInput {
+      flex-grow: 1;
+      padding: 8px;
+      border-radius: 4px;
+      border: none;
+      font-size: 16px;
+    }
+    #sendBtn {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 0 15px;
+      margin-left: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="usersList">
+    <h2>Users</h2>
+    <div id="userItems"></div>
+  </div>
+
+  <div id="chatSection">
+    <div id="chatHeader">
+      <div id="chatWith">Select a user to chat</div>
+      <button id="calendarButton" style="display:none;">📅 Calendar</button>
+    </div>
+    <div id="messages"></div>
+    <form id="messageForm" style="display:none;">
+      <input type="text" id="messageInput" placeholder="Type a message..." autocomplete="off" />
+      <button type="submit" id="sendBtn">Send</button>
+    </form>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Your Firebase config here
+    const firebaseConfig = {
+      apiKey: "AIzaSyDfbHpARFNeXY81UVug1IhrFbV1pcdVICA",
+      authDomain: "lime-a2942.firebaseapp.com",
+      projectId: "lime-a2942",
+      storageBucket: "lime-a2942.firebasestorage.app",
+      messagingSenderId: "165832665415",
+      appId: "1:165832665415:web:ff4fce557f46ca594d8462",
+      measurementId: "G-CYMGB54426"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    const adminUID = "Ww2huqRx1oQGqJOImJCzc7XJCeh1";  // Replace with your admin UID
+
+    let selectedUserId = null;
+    let messagesUnsub = null;
+    let calendarUnsub = null;
+    let usersUnsub = null;
+
+    const userItemsEl = document.getElementById('userItems');
+    const chatWithEl = document.getElementById('chatWith');
+    const calendarButton = document.getElementById('calendarButton');
+    const messagesEl = document.getElementById('messages');
+    const messageForm = document.getElementById('messageForm');
+    const messageInput = document.getElementById('messageInput');
+
+    // Listen auth state
+    auth.onAuthStateChanged(async user => {
+      if (!user) {
+        alert("Please login first.");
+        return location.href = "index.html";
+      }
+      if (user.uid !== adminUID) {
+        alert("Unauthorized access!");
+        return location.href = "index.html";
+      }
+
+      // Load users list with notifications
+      loadUsersList();
+    });
+
+    // Load users list, show last msg and notification badges
+    function loadUsersList() {
+      usersUnsub = db.collection('users')
+        .onSnapshot(snapshot => {
+          userItemsEl.innerHTML = '';
+          snapshot.forEach(doc => {
+            const user = doc.data();
+            const userId = doc.id;
+
+            // Get last message & unread count for that user chat
+            getLastMessageAndNotifications(userId).then(({lastMsgTime, unreadMsgCount, unreadCalCount}) => {
+              const lastTimeText = lastMsgTime ? new Date(lastMsgTime.seconds * 1000).toLocaleString() : "No messages";
+              const badgeMsgs = unreadMsgCount > 0 ? `<span class="notificationBadge">${unreadMsgCount}</span>` : '';
+              const badgeCal = unreadCalCount > 0 ? `<span class="notificationBadge" title="New Calendar Events">📅</span>` : '';
+
+              const userDiv = document.createElement('div');
+              userDiv.classList.add('userItem');
+              if(userId === selectedUserId) userDiv.style.background = '#333';
+              userDiv.innerHTML = `
+                <div>
+                  <span class="userName">${user.name}</span><br />
+                  <span class="userMeta">${lastTimeText}</span>
+                </div>
+                <div>
+                  ${badgeMsgs} ${badgeCal}
+                </div>
+              `;
+
+              userDiv.onclick = () => {
+                selectUser(userId, user.name);
+              };
+
+              userItemsEl.appendChild(userDiv);
+            });
+          });
+        });
+    }
+
+    // Get last message timestamp and unread counts for a user
+    async function getLastMessageAndNotifications(userId) {
+      let lastMsgTime = null;
+      let unreadMsgCount = 0;
+      let unreadCalCount = 0;
+
+      // Messages between admin and user stored in 'messages/{chatId}/msgs'
+      // chatId format: adminUID_userId (sorted lexicographically)
+      const chatId = [adminUID, userId].sort().join('_');
+      const msgsRef = db.collection('messages').doc(chatId).collection('msgs');
+
+      // Get last message timestamp
+      const lastMsgSnapshot = await msgsRef.orderBy('timestamp', 'desc').limit(1).get();
+      if (!lastMsgSnapshot.empty) {
+        lastMsgTime = lastMsgSnapshot.docs[0].data().timestamp;
+      }
+
+      // Count unread messages from user to admin
+      const unreadSnapshot = await msgsRef
+        .where('to', '==', adminUID)
+        .where('from', '==', userId)
+        .where('read', '==', false)
+        .get();
+      unreadMsgCount = unreadSnapshot.size;
+
+      // Check unread calendar events count for this user
+      const calRef = db.collection('calendars').doc(userId);
+      const calDoc = await calRef.get();
+      if (calDoc.exists && calDoc.data().unreadByAdmin) {
+        unreadCalCount = calDoc.data().unreadByAdmin;
+      }
+
+      return { lastMsgTime, unreadMsgCount, unreadCalCount };
+    }
+
+    // Select user to load chat
+    function selectUser(userId, userName) {
+      selectedUserId = userId;
+      chatWithEl.textContent = `Chat with ${userName}`;
+      calendarButton.style.display = 'inline-block';
+      messageForm.style.display = 'flex';
+      messagesEl.innerHTML = '';
+
+      // Show calendar button link
+      calendarButton.onclick = () => {
+        window.location.href = `calendar.html?userId=${selectedUserId}`;
+      };
+
+      if (messagesUnsub) messagesUnsub();
+      messagesUnsub = listenMessages(selectedUserId);
+
+      if (calendarUnsub) calendarUnsub();
+      calendarUnsub = listenCalendarUpdates(selectedUserId);
+    }
+
+    // Listen to messages in real time and show them
+    function listenMessages(userId) {
+      const chatId = [adminUID, userId].sort().join('_');
+      const msgsRef = db.collection('messages').doc(chatId).collection('msgs').orderBy('timestamp', 'asc');
+
+      return msgsRef.onSnapshot(snapshot => {
+        messagesEl.innerHTML = '';
+        snapshot.forEach(doc => {
+          const msg = doc.data();
+          const msgDiv = document.createElement('div');
+          msgDiv.classList.add('message');
+          msgDiv.classList.add(msg.from === adminUID ? 'admin' : 'user');
+          msgDiv.textContent = msg.text;
+          messagesEl.appendChild(msgDiv);
+        });
+
+        // Scroll down
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+
+        // Mark all messages sent to admin as read
+        snapshot.docs.forEach(doc => {
+          const msg = doc.data();
+          if (msg.to === adminUID && !msg.read) {
+            doc.ref.update({ read: true });
+          }
+        });
+      });
+    }
+
+    // Listen calendar updates for notification badge refresh
+    function listenCalendarUpdates(userId) {
+      const calRef = db.collection('calendars').doc(userId);
+      return calRef.onSnapshot(doc => {
+        if (doc.exists) {
+          const data = doc.data();
+          // If admin views the calendar for the user, clear unread
+          if (selectedUserId === userId && data.unreadByAdmin && data.unreadByAdmin > 0) {
+            calRef.update({ unreadByAdmin: 0 });
+          }
+          // Refresh users list to update calendar badges
+          loadUsersList();
+        }
+      });
+    }
+
+    // Sending a new message
+    messageForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!selectedUserId) return alert("Select a user first!");
+      const text = messageInput.value.trim();
+      if (!text) return;
+
+      const chatId = [adminUID, selectedUserId].sort().join('_');
+      const msgsRef = db.collection('messages').doc(chatId).collection('msgs');
+
+      await msgsRef.add({
+        text,
+        from: adminUID,
+        to: selectedUserId,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        read: false
+      });
+
+      messageInput.value = '';
+    });
+
+     // Emoji buttons setup
+    const emojiList = ['😊', '👍', '❤️', '😂', '😢', '😮'];
+    emojiList.forEach(emoji => {
+      const span = document.createElement('span');
+      span.classList.add('emoji');
+      span.textContent = emoji;
+      span.onclick = () => sendMessage(emoji);
+      emojiPicker.appendChild(span);
+    });
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat Page</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      height: 100vh;
+      margin: 0;
+      background: #121212;
+      color: #eee;
+    }
+    #userList {
+      width: 280px;
+      border-right: 1px solid #333;
+      overflow-y: auto;
+      background: #1e1e1e;
+    }
+    #userList .userItem {
+      padding: 12px;
+      border-bottom: 1px solid #333;
+      cursor: pointer;
+      position: relative;
+    }
+    #userList .userItem:hover, #userList .userItem.active {
+      background: #333;
+    }
+    #userList .userName {
+      font-weight: bold;
+    }
+    #userList .lastMsgTime {
+      font-size: 0.8em;
+      color: #aaa;
+    }
+    #userList .newMsgBadge {
+      position: absolute;
+      right: 12px;
+      top: 15px;
+      background: red;
+      color: white;
+      font-size: 0.75em;
+      padding: 2px 6px;
+      border-radius: 12px;
+      display: none;
+    }
+
+    #chatSection {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #chatHeader {
+      background: #222;
+      padding: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #444;
+    }
+    #chatHeader h2 {
+      margin: 0;
+      font-weight: normal;
+    }
+    #calendarBtn {
+      position: relative;
+      background: #444;
+      color: white;
+      border: none;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 1em;
+      border-radius: 5px;
+    }
+    #calendarBadge {
+      display: none;
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      background: red;
+      color: white;
+      border-radius: 50%;
+      padding: 3px 7px;
+      font-size: 0.75em;
+      font-weight: bold;
+    }
+    #chatMessages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      background: #181818;
+    }
+    #chatInputSection {
+      padding: 15px;
+      background: #222;
+      display: flex;
+      align-items: center;
+      border-top: 1px solid #444;
+    }
+    #chatInput {
+      flex: 1;
+      padding: 10px;
+      border-radius: 5px;
+      border: none;
+      font-size: 1em;
+    }
+    #sendBtn {
+      margin-left: 10px;
+      padding: 10px 15px;
+      background: #00aaff;
+      border: none;
+      border-radius: 5px;
+      color: white;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="userList"></div>
+
+  <div id="chatSection">
+    <div id="chatHeader">
+      <h2 id="chatWith">Select a user to chat</h2>
+      <button id="calendarBtn">
+        📅 Calendar
+        <span id="calendarBadge">0</span>
+      </button>
+    </div>
+
+    <div id="chatMessages"></div>
+
+    <div id="chatInputSection" style="display:none;">
+      <input type="text" id="chatInput" placeholder="Type a message..." />
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Firebase config - replace with your own
+    const firebaseConfig = {
+      apiKey: "AIzaSyDfbHpARFNeXY81UVug1IhrFbV1pcdVICA",
+      authDomain: "lime-a2942.firebaseapp.com",
+      projectId: "lime-a2942",
+      storageBucket: "lime-a2942.firebasestorage.app",
+      messagingSenderId: "165832665415",
+      appId: "1:165832665415:web:ff4fce557f46ca594d8462",
+      measurementId: "G-CYMGB54426"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    // Globals
+    let currentUser = null;
+    let selectedUser = null; // The user the admin clicked or the user themself
+    let chatDocID = null;
+    let unsubscribeMessages = null;
+    let unsubscribeCalendarBadge = null;
+
+    // UI Elements
+    const userListEl = document.getElementById('userList');
+    const chatWithEl = document.getElementById('chatWith');
+    const chatMessagesEl = document.getElementById('chatMessages');
+    const chatInputSection = document.getElementById('chatInputSection');
+    const chatInput = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const calendarBtn = document.getElementById('calendarBtn');
+    const calendarBadge = document.getElementById('calendarBadge');
+
+    // Admin UID - replace with your admin UID
+    const adminUID = "Ww2huqRx1oQGqJOImJCzc7XJCeh1";
+
+    // Helper to format timestamp
+    function formatTimestamp(ts) {
+      if (!ts) return "";
+      const date = ts.toDate ? ts.toDate() : new Date(ts);
+      return date.toLocaleString();
+    }
+
+    // Generate chat doc ID from two user UIDs (sorted to keep consistent)
+    function getChatDocId(uid1, uid2) {
+      return [uid1, uid2].sort().join('_');
+    }
+
+    // Load chat messages and listen for new ones
+    function loadChatMessages(docId) {
+      if (unsubscribeMessages) unsubscribeMessages();
+
+      chatMessagesEl.innerHTML = '';
+      unsubscribeMessages = db.collection("chats")
+        .doc(docId)
+        .collection("messages")
+        .orderBy("timestamp")
+        .onSnapshot(snapshot => {
+          chatMessagesEl.innerHTML = "";
+          snapshot.forEach(doc => {
+            const msg = doc.data();
+            const sender = msg.sender === currentUser.uid ? "You" : selectedUser.name || "User";
+            const messageEl = document.createElement("div");
+            messageEl.textContent = `${sender}: ${msg.text} (${formatTimestamp(msg.timestamp)})`;
+            chatMessagesEl.appendChild(messageEl);
+          });
+          chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+        });
+    }
+
+    // Listen for chat users (for admin only)
+    function loadUserList() {
+      if (currentUser.uid !== adminUID) return;
+
+      db.collection("users").onSnapshot(snapshot => {
+        userListEl.innerHTML = "";
+        snapshot.forEach(doc => {
+          const userData = doc.data();
+          if (userData.uid === adminUID) return; // Skip admin himself
+
+          const chatId = getChatDocId(adminUID, userData.uid);
+
+          // Get last message timestamp and new message count
+          db.collection("chats").doc(chatId).collection("messages")
+            .orderBy("timestamp", "desc")
+            .limit(1)
+            .get()
+            .then(msgSnap => {
+              let lastMsgTime = "";
+              if (!msgSnap.empty) {
+                lastMsgTime = formatTimestamp(msgSnap.docs[0].data().timestamp);
+              }
+
+              // Check for unread messages
+              db.collection("chats").doc(chatId).collection("messages")
+                .where("readBy", "not-in", [currentUser.uid])
+                .get()
+                .then(unreadSnap => {
+                  const unreadCount = unreadSnap.size;
+
+                  // Create user item
+                  const userItem = document.createElement("div");
+                  userItem.classList.add("userItem");
+                  userItem.dataset.uid = userData.uid;
+                  userItem.dataset.name = userData.name;
+
+                  userItem.innerHTML = `
+                    <div class="userName">${userData.name}</div>
+                    <div class="lastMsgTime">${lastMsgTime}</div>
+                    <div class="newMsgBadge" ${unreadCount > 0 ? "style='display:block'" : ""}>${unreadCount}</div>
+                  `;
+
+                  userListEl.appendChild(userItem);
+
+                  userItem.addEventListener("click", () => {
+                    selectUser(userData);
+                  });
+                });
+            });
+        });
+      });
+    }
+
+    // Select a user to chat with (admin)
+    function selectUser(userData) {
+      selectedUser = userData;
+      chatWithEl.textContent = `Chat with ${userData.name}`;
+      chatInputSection.style.display = "flex";
+      chatDocID = getChatDocId(currentUser.uid, userData.uid);
+
+      // Load chat messages for selected user
+      loadChatMessages(chatDocID);
+
+      // Listen for calendar events badge
+      setupCalendarBadge();
+
+      // Mark messages as read (for simplicity, mark all messages read)
+      markMessagesRead(chatDocID);
+    }
+
+    // Mark messages as read by current user
+    async function markMessagesRead(chatId) {
+      const msgsRef = db.collection("chats").doc(chatId).collection("messages");
+      const unreadMsgs = await msgsRef.where("readBy", "not-in", [currentUser.uid]).get();
+      const batch = db.batch();
+      unreadMsgs.forEach(doc => {
+        batch.update(doc.ref, { readBy: firebase.firestore.FieldValue.arrayUnion(currentUser.uid) });
+      });
+      await batch.commit();
+    }
+
+    // Send new chat message
+    async function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text || !chatDocID) return;
+
+      await db.collection("chats").doc(chatDocID).collection("messages").add({
+        text,
+        sender: currentUser.uid,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        readBy: [currentUser.uid] // sender read it immediately
+      });
+
+      chatInput.value = "";
+
+      // Update last message timestamp in chats doc (optional)
+      await db.collection("chats").doc(chatDocID).set({
+        lastMessageTimestamp: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+
+    // Setup calendar badge listener
+    function setupCalendarBadge() {
+      if (unsubscribeCalendarBadge) unsubscribeCalendarBadge();
+
+      calendarBadge.style.display = "none";
+
+      if (!chatDocID || !currentUser) return;
+
+      const chatRef = db.collection("chats").doc(chatDocID);
+      
+      unsubscribeCalendarBadge = chatRef.collection("calendarEvents")
+        .where("createdAt", ">", firebase.firestore.Timestamp.now()) // Initially no events after now
+        .onSnapshot(snapshot => {
+          if (snapshot.size > 0) {
+            calendarBadge.style.display = "inline-block";
+            calendarBadge.textContent = snapshot.size;
+          } else {
+            calendarBadge.style.display = "none";
+          }
+        });
+    }
+
+    // Handle calendar button click
+    calendarBtn.addEventListener("click",() => {
+if (!chatDocID) return;
+// Redirect to calendar.html with chatId query param
+window.location.href = calendar.html?chatId=$:{chatDocID};
+});
+sendBtn.addEventListener("click", sendMessage);
+
+chatInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") sendMessage();
+});
+
+// On load - authenticate user
+auth.onAuthStateChanged(user => {
+  if (user) {
+    currentUser = user;
+
+    if (currentUser.uid === adminUID) {
+      // Admin sees user list
+      chatInputSection.style.display = "none";
+      chatWithEl.textContent = "Select a user to chat";
+
+      loadUserList();
+      calendarBadge.style.display = "none";
+    } else {
+      // Normal user: no user list, chat only with admin
+      userListEl.style.display = "none";
+      selectedUser = { uid: adminUID, name: "Admin" };
+      chatWithEl.textContent = "Chat with Admin";
+      chatInputSection.style.display = "flex";
+      chatDocID = getChatDocId(currentUser.uid, adminUID);
+
+      loadChatMessages(chatDocID);
+      setupCalendarBadge();
+
+      // Mark messages as read
+      markMessagesRead(chatDocID);
+    }
+  } else {
+    // Not logged in
+    alert("Please login to access chat.");
+    window.location.href = "login.html";
+  }
+});

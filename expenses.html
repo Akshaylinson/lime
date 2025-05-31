@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Expense Tracker</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f1f3f5;
+      margin: 0;
+      padding: 30px 15px;
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      max-width: 600px;
+      width: 100%;
+      border-radius: 10px;
+      padding: 30px 40px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-top: 0;
+      text-align: center;
+      font-size: 28px;
+      margin-bottom: 25px;
+      color: #333;
+    }
+    .expense-form {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 25px;
+      justify-content: center;
+    }
+    .expense-form input,
+    .expense-form select {
+      padding: 10px;
+      font-size: 14px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      min-width: 140px;
+      box-sizing: border-box;
+    }
+    .expense-form button {
+      background-color: #28a745;
+      color: white;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background-color 0.3s ease;
+    }
+    .expense-form button:hover {
+      background-color: #218838;
+    }
+    .month-selector {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .month-selector label {
+      font-weight: 600;
+      margin-right: 8px;
+      color: #555;
+    }
+    .month-selector select {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 14px;
+      min-width: 160px;
+    }
+    .expense-table table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .expense-table th,
+    .expense-table td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid #ddd;
+      font-size: 14px;
+      color: #444;
+    }
+    .expense-table th {
+      background: #f8f9fa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>💰 Expense Tracker</h1>
+
+    <div class="expense-form">
+      <input type="text" id="expName" placeholder="Expense/Income Name" />
+      <input type="date" id="expDate" />
+      <input type="number" id="expAmount" placeholder="Amount" />
+      <select id="expType">
+        <option value="income">Income</option>
+        <option value="expense">Expense</option>
+      </select>
+      <button onclick="addExpense()">Add</button>
+    </div>
+
+    <div class="month-selector">
+      <label for="monthSelect">Select Month:</label>
+      <select id="monthSelect" onchange="loadExpensesByMonth()">
+        <!-- Options will be dynamically created -->
+      </select>
+    </div>
+
+    <div class="expense-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Type</th>
+          </tr>
+        </thead>
+        <tbody id="expenseTableBody">
+          <!-- Expenses will appear here -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+
+  <script>
+    // TODO: Replace the below config with your Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDfbHpARFNeXY81UVug1IhrFbV1pcdVICA",
+        authDomain: "lime-a2942.firebaseapp.com",
+        projectId: "lime-a2942",
+        storageBucket: "lime-a2942.firebasestorage.app",
+        messagingSenderId: "165832665415",
+        appId: "1:165832665415:web:ff4fce557f46ca594d8462",
+        measurementId: "G-CYMGB54426"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    // Simple user-based expense storage under their UID in Firestore
+    let currentUser = null;
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        currentUser = user;
+        populateMonthSelect();
+        loadExpensesByMonth();
+      } else {
+        window.location.href = "index.html"; // Redirect if not logged in
+      }
+    });
+
+    // Add expense/income
+    async function addExpense() {
+      const name = document.getElementById("expName").value.trim();
+      const date = document.getElementById("expDate").value;
+      const amount = parseFloat(document.getElementById("expAmount").value);
+      const type = document.getElementById("expType").value;
+
+      if (!name || !date || isNaN(amount) || amount <= 0) {
+        alert("Please fill in all fields with valid values.");
+        return;
+      }
+
+      try {
+        await db.collection("expenses")
+          .add({
+            uid: currentUser.uid,
+            name,
+            date,
+            amount,
+            type,
+            timestamp: firebase.firestore.Timestamp.fromDate(new Date(date))
+          });
+
+        alert("Expense added successfully!");
+        clearForm();
+        loadExpensesByMonth();
+      } catch (error) {
+        console.error("Error adding expense: ", error);
+        alert("Failed to add expense. Try again.");
+      }
+    }
+
+    function clearForm() {
+      document.getElementById("expName").value = "";
+      document.getElementById("expDate").value = "";
+      document.getElementById("expAmount").value = "";
+      document.getElementById("expType").value = "income";
+    }
+
+    // Populate month selector with last 12 months including current
+    function populateMonthSelect() {
+      const select = document.getElementById("monthSelect");
+      select.innerHTML = "";
+      const now = new Date();
+      for (let i = 0; i < 12; i++) {
+        let d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        let monthStr = d.toLocaleString("default", { month: "long", year: "numeric" });
+        let value = d.toISOString().slice(0,7); // YYYY-MM format
+        let option = document.createElement("option");
+        option.value = value;
+        option.textContent = monthStr;
+        select.appendChild(option);
+      }
+    }
+
+    // Load expenses for selected month
+    async function loadExpensesByMonth() {
+      const select = document.getElementById("monthSelect");
+      const selectedMonth = select.value;
+      if (!selectedMonth) return;
+
+      const [year, month] = selectedMonth.split("-");
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 1);
+
+      try {
+        const snapshot = await db.collection("expenses")
+          .where("uid", "==", currentUser.uid)
+          .where("timestamp", ">=", firebase.firestore.Timestamp.fromDate(startDate))
+          .where("timestamp", "<", firebase.firestore.Timestamp.fromDate(endDate))
+          .orderBy("timestamp", "desc")
+          .get();
+
+        const tbody = document.getElementById("expenseTableBody");
+        tbody.innerHTML = "";
+
+        if (snapshot.empty) {
+          tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#888;">No records found for this month.</td></tr>`;
+          return;
+        }
+
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${data.name}</td>
+            <td>${new Date(data.date).toLocaleDateString()}</td>
+            <td>${data.amount.toFixed(2)}</td>
+            <td style="text-transform: capitalize;">${data.type}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (error) {
+        console.error("Error loading expenses: ", error);
+        alert("Could not load expenses.");
+      }
+    }
+  </script>
+</body>
+</html>
